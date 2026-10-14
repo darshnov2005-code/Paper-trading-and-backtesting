@@ -1,52 +1,69 @@
 import type { MarketSymbol, Candle } from "@/types";
 
-// Popular symbols with base prices for simulation
+// Indian market symbols - Equity + F&O (Nifty, BankNifty, stocks)
 export const POPULAR_SYMBOLS: Omit<MarketSymbol, "price" | "change" | "changePercent">[] = [
-  { symbol: "AAPL", name: "Apple Inc.", type: "stock" },
-  { symbol: "MSFT", name: "Microsoft Corp.", type: "stock" },
-  { symbol: "GOOGL", name: "Alphabet Inc.", type: "stock" },
-  { symbol: "AMZN", name: "Amazon.com Inc.", type: "stock" },
-  { symbol: "NVDA", name: "NVIDIA Corp.", type: "stock" },
-  { symbol: "TSLA", name: "Tesla Inc.", type: "stock" },
-  { symbol: "META", name: "Meta Platforms", type: "stock" },
-  { symbol: "SPY", name: "SPDR S&P 500 ETF", type: "etf" },
-  { symbol: "QQQ", name: "Invesco QQQ Trust", type: "etf" },
-  { symbol: "BTC", name: "Bitcoin", type: "crypto" },
-  { symbol: "ETH", name: "Ethereum", type: "crypto" },
-  { symbol: "SOL", name: "Solana", type: "crypto" },
+  // Indices
+  { symbol: "NIFTY", name: "Nifty 50", type: "index" },
+  { symbol: "BANKNIFTY", name: "Bank Nifty", type: "index" },
+  { symbol: "FINNIFTY", name: "Fin Nifty", type: "index" },
+  { symbol: "MIDCPNIFTY", name: "Midcap Nifty", type: "index" },
+  // Large Cap Stocks (F&O)
+  { symbol: "RELIANCE", name: "Reliance Industries", type: "stock" },
+  { symbol: "TCS", name: "Tata Consultancy", type: "stock" },
+  { symbol: "HDFCBANK", name: "HDFC Bank", type: "stock" },
+  { symbol: "INFY", name: "Infosys", type: "stock" },
+  { symbol: "ICICIBANK", name: "ICICI Bank", type: "stock" },
+  { symbol: "SBIN", name: "State Bank of India", type: "stock" },
+  { symbol: "BHARTIARTL", name: "Bharti Airtel", type: "stock" },
+  { symbol: "ITC", name: "ITC Limited", type: "stock" },
+  { symbol: "LT", name: "Larsen & Toubro", type: "stock" },
+  { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank", type: "stock" },
+  { symbol: "AXISBANK", name: "Axis Bank", type: "stock" },
+  { symbol: "WIPRO", name: "Wipro", type: "stock" },
+  { symbol: "HCLTECH", name: "HCL Technologies", type: "stock" },
+  { symbol: "BAJFINANCE", name: "Bajaj Finance", type: "stock" },
+  { symbol: "ASIANPAINT", name: "Asian Paints", type: "stock" },
+  { symbol: "MARUTI", name: "Maruti Suzuki", type: "stock" },
 ];
 
-// Base prices (approximate realistic starting points)
+// Approximate realistic base prices (INR)
 const BASE_PRICES: Record<string, number> = {
-  AAPL: 230,
-  MSFT: 430,
-  GOOGL: 175,
-  AMZN: 195,
-  NVDA: 140,
-  TSLA: 250,
-  META: 580,
-  SPY: 580,
-  QQQ: 510,
-  BTC: 65000,
-  ETH: 3400,
-  SOL: 150,
+  NIFTY: 24500,
+  BANKNIFTY: 52000,
+  FINNIFTY: 23500,
+  MIDCPNIFTY: 12500,
+  RELIANCE: 1280,
+  TCS: 4100,
+  HDFCBANK: 1720,
+  INFY: 1850,
+  ICICIBANK: 1280,
+  SBIN: 820,
+  BHARTIARTL: 1650,
+  ITC: 470,
+  LT: 3600,
+  KOTAKBANK: 1780,
+  AXISBANK: 1150,
+  WIPRO: 540,
+  HCLTECH: 1850,
+  BAJFINANCE: 7200,
+  ASIANPAINT: 2450,
+  MARUTI: 12500,
 };
 
-// Simple seeded random for reproducible simulation
 function seededRandom(seed: number) {
   const x = Math.sin(seed) * 10000;
   return x - Math.floor(x);
 }
 
-// Generate realistic-looking current prices with daily drift
 export function getSimulatedPrices(): MarketSymbol[] {
   const now = Date.now();
   const daySeed = Math.floor(now / 86400000);
 
   return POPULAR_SYMBOLS.map((s) => {
-    const base = BASE_PRICES[s.symbol] ?? 100;
-    const noise = (seededRandom(daySeed + s.symbol.charCodeAt(0)) - 0.5) * 0.04;
-    const intraDay = (seededRandom(now / 60000 + s.symbol.length) - 0.5) * 0.01;
+    const base = BASE_PRICES[s.symbol] ?? 1000;
+    const volMult = s.type === "index" ? 0.015 : 0.025;
+    const noise = (seededRandom(daySeed + s.symbol.charCodeAt(0) * 7) - 0.5) * volMult * 2;
+    const intraDay = (seededRandom(now / 30000 + s.symbol.length * 3) - 0.5) * 0.008;
     const price = base * (1 + noise + intraDay);
     const changePercent = (noise + intraDay) * 100;
     const change = price * (changePercent / 100);
@@ -63,10 +80,9 @@ export function getSimulatedPrices(): MarketSymbol[] {
 export function getSymbolPrice(symbol: string): number {
   const all = getSimulatedPrices();
   const found = all.find((s) => s.symbol === symbol);
-  return found?.price ?? BASE_PRICES[symbol] ?? 100;
+  return found?.price ?? BASE_PRICES[symbol] ?? 1000;
 }
 
-// Generate OHLCV candles for backtesting (geometric Brownian motion)
 export function generateHistoricalCandles(
   symbol: string,
   startDate: string,
@@ -77,15 +93,16 @@ export function generateHistoricalCandles(
   const end = new Date(endDate).getTime();
   if (end <= start) return [];
 
-  const base = BASE_PRICES[symbol] ?? 100;
+  const base = BASE_PRICES[symbol] ?? 1000;
   const candles: Candle[] = [];
-  let price = base * 0.7;
+  let price = base * 0.85;
   const msPerCandle = intervalDays * 86400000;
   let t = start;
-  let seed = symbol.charCodeAt(0) * 1000;
+  let seed = symbol.charCodeAt(0) * 137;
 
-  const vol = symbol === "BTC" || symbol === "ETH" || symbol === "SOL" ? 0.6 : 0.25;
-  const drift = 0.08;
+  const isIndex = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"].includes(symbol);
+  const vol = isIndex ? 0.18 : 0.28;
+  const drift = 0.12;
 
   while (t <= end) {
     const dt = intervalDays / 252;
@@ -93,9 +110,9 @@ export function generateHistoricalCandles(
     const ret = drift * dt + shock;
     const open = price;
     const close = price * (1 + ret);
-    const high = Math.max(open, close) * (1 + Math.abs(seededRandom(seed++)) * 0.01);
-    const low = Math.min(open, close) * (1 - Math.abs(seededRandom(seed++)) * 0.01);
-    const volume = Math.floor(1_000_000 * (0.5 + seededRandom(seed++)));
+    const high = Math.max(open, close) * (1 + Math.abs(seededRandom(seed++)) * 0.012);
+    const low = Math.min(open, close) * (1 - Math.abs(seededRandom(seed++)) * 0.012);
+    const volume = Math.floor((isIndex ? 5_000_000 : 800_000) * (0.4 + seededRandom(seed++)));
 
     candles.push({
       time: Math.floor(t / 1000),
@@ -113,7 +130,6 @@ export function generateHistoricalCandles(
   return candles;
 }
 
-// Simple SMA
 export function sma(data: number[], period: number): (number | null)[] {
   const result: (number | null)[] = [];
   for (let i = 0; i < data.length; i++) {
@@ -128,7 +144,6 @@ export function sma(data: number[], period: number): (number | null)[] {
   return result;
 }
 
-// RSI
 export function rsi(closes: number[], period = 14): (number | null)[] {
   const result: (number | null)[] = new Array(closes.length).fill(null);
   if (closes.length < period + 1) return result;
