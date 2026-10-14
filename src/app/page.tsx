@@ -8,7 +8,7 @@ import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { MarketSymbol } from "@/types";
 
 export default function Dashboard() {
-  const { portfolio, totalValue, totalPnL, updatePrices, resetPortfolio } = usePortfolio();
+  const { portfolio, totalValue, totalPnL, totalPnLPercent, updatePrices, resetPortfolio } = usePortfolio();
   const [markets, setMarkets] = useState<MarketSymbol[]>([]);
   const [filter, setFilter] = useState<"all" | "index" | "stock">("all");
 
@@ -47,7 +47,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Index Ticker */}
       <div className="mb-6 flex gap-3 overflow-x-auto pb-1">
         {indices.map((idx) => (
           <Link key={idx.symbol} href={`/trade?symbol=${idx.symbol}`} className="card card-hover flex min-w-[160px] flex-col gap-0.5 px-4 py-3">
@@ -58,11 +57,10 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Stats */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="card"><p className="text-xs text-[var(--muted)]">Total Value</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalValue)}</p></div>
         <div className="card"><p className="text-xs text-[var(--muted)]">Available Cash</p><p className="mt-1 text-2xl font-bold">{formatCurrency(portfolio.cash)}</p></div>
-        <div className="card"><p className="text-xs text-[var(--muted)]">Total P&L</p><p className={cn("mt-1 text-2xl font-bold", totalPnL.value >= 0 ? "pos" : "neg")}>{formatCurrency(totalPnL.value)} <span className="text-sm font-medium">({formatPercent(totalPnL.percent)})</span></p></div>
+        <div className="card"><p className="text-xs text-[var(--muted)]">Total P&L</p><p className={cn("mt-1 text-2xl font-bold", totalPnL >= 0 ? "pos" : "neg")}>{formatCurrency(totalPnL)} <span className="text-sm font-medium">({formatPercent(totalPnLPercent)})</span></p></div>
         <div className="card"><p className="text-xs text-[var(--muted)]">Open Positions</p><p className="mt-1 text-2xl font-bold">{positions.length}</p></div>
       </div>
 
