@@ -8,6 +8,8 @@ export interface Position {
   unrealizedPnL: number;
   unrealizedPnLPercent: number;
   product?: "CNC" | "MIS" | "NRML";
+  stopLoss?: number;
+  target?: number;
 }
 
 export interface Trade {
@@ -21,6 +23,9 @@ export interface Trade {
   timestamp: number;
   fees: number;
   product?: "CNC" | "MIS" | "NRML";
+  stopLoss?: number;
+  target?: number;
+  pnl?: number;
 }
 
 export interface Portfolio {
