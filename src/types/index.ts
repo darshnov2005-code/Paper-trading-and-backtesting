@@ -7,6 +7,7 @@ export interface Position {
   marketValue: number;
   unrealizedPnL: number;
   unrealizedPnLPercent: number;
+  product?: "CNC" | "MIS" | "NRML";
 }
 
 export interface Trade {
@@ -19,6 +20,7 @@ export interface Trade {
   total: number;
   timestamp: number;
   fees: number;
+  product?: "CNC" | "MIS" | "NRML";
 }
 
 export interface Portfolio {
@@ -32,7 +34,7 @@ export interface Portfolio {
 export interface MarketSymbol {
   symbol: string;
   name: string;
-  type: "stock" | "crypto" | "etf";
+  type: "stock" | "index" | "crypto" | "etf";
   price: number;
   change: number;
   changePercent: number;
@@ -41,7 +43,7 @@ export interface MarketSymbol {
 }
 
 export interface Candle {
-  time: number; // unix seconds
+  time: number;
   open: number;
   high: number;
   low: number;

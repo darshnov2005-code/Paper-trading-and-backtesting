@@ -3,9 +3,9 @@ export function cn(...classes: (string | false | null | undefined)[]) {
 }
 
 export function formatCurrency(value: number, decimals = 2): string {
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat("en-IN", {
     style: "currency",
-    currency: "USD",
+    currency: "INR",
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(value);
@@ -17,7 +17,7 @@ export function formatPercent(value: number, decimals = 2): string {
 }
 
 export function formatNumber(value: number, decimals = 2): string {
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat("en-IN", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(value);
