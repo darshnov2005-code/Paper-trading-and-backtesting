@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PaperTrade — Paper Trading & Backtesting",
+  title: "PaperTrade India — F&O | Intraday | Futures",
   description:
-    "Practice stock and crypto trading with virtual money. Run backtests on common strategies. 100% free, no real money risk. Deployed on Vercel.",
+    "Paper trading platform for Indian stock markets. Trade Nifty, BankNifty, F&O stocks with virtual money. Intraday, Futures & Options practice.",
 };
 
 export default function RootLayout({
@@ -30,12 +30,12 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="min-h-full flex flex-col bg-[var(--background)] text-[var(--foreground)]">
         <PortfolioProvider>
           <Navbar />
           <main className="flex-1">{children}</main>
-          <footer className="border-t border-zinc-200 py-6 text-center text-sm text-zinc-500 dark:border-zinc-800">
-            PaperTrade · Simulated trading only · No real money · Built for learning
+          <footer className="border-t border-[var(--border)] py-4 text-center text-xs text-[var(--muted)]">
+            PaperTrade India · Simulated NSE F&amp;O · Educational only · No real money
           </footer>
         </PortfolioProvider>
       </body>
