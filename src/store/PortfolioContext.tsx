@@ -4,8 +4,8 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import type { Portfolio, Position, Trade, MarketSymbol } from "@/types";
 import { uid } from "@/lib/utils";
 
-const INITIAL_CASH = 100_000;
-const STORAGE_KEY = "paper-trading-portfolio-v1";
+const INITIAL_CASH = 10_00_000; // ₹10 Lakh
+const STORAGE_KEY = "paper-trading-portfolio-v2";
 
 const emptyPortfolio = (): Portfolio => ({
   cash: INITIAL_CASH,
