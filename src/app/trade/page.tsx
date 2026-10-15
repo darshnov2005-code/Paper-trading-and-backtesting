@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePortfolio } from "@/store/PortfolioContext";
-import { getSimulatedPrices, POPULAR_SYMBOLS } from "@/lib/market-data";
-import { generateOptionChain, type OptionContract, type OptionType } from "@/lib/options";
+import { getSimulatedPrices, POPULAR_SYMBOLS, generateIntradayCandles } from "@/lib/market-data";
+import { generateOptionChain, getExpiries, type OptionContract } from "@/lib/options";
+import { MiniChart } from "@/components/MiniChart";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { MarketSymbol } from "@/types";
 
@@ -23,12 +24,15 @@ function TradeContent() {
 
   const [markets, setMarkets] = useState<MarketSymbol[]>([]);
   const [selected, setSelected] = useState(initial);
+  const [search, setSearch] = useState("");
   const [segment, setSegment] = useState<Segment>("OPT");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [product, setProduct] = useState<Product>("MIS");
-  const [optionType, setOptionType] = useState<OptionType>("CE");
   const [selectedOption, setSelectedOption] = useState<OptionContract | null>(null);
   const [qty, setQty] = useState("25");
+  const [sl, setSl] = useState("");
+  const [tgt, setTgt] = useState("");
+  const [expiryIdx, setExpiryIdx] = useState(0);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [livePrice, setLivePrice] = useState<{ price: number; changePercent: number; source: string } | null>(null);
 
@@ -67,22 +71,46 @@ function TradeContent() {
   }, [selected, markets]);
 
   const spot = livePrice?.price || markets.find((m) => m.symbol === selected)?.price || 0;
-  const optionChain = segment === "OPT" && spot > 0 ? generateOptionChain(selected, spot, optionType) : [];
-  const activeContract = selectedOption || optionChain[8] || null;
+  const expiries = useMemo(() => getExpiries(selected), [selected]);
+  const ceChain = useMemo(
+    () => (segment === "OPT" && spot > 0 ? generateOptionChain(selected, spot, "CE", expiryIdx) : []),
+    [segment, spot, selected, expiryIdx]
+  );
+  const peChain = useMemo(
+    () => (segment === "OPT" && spot > 0 ? generateOptionChain(selected, spot, "PE", expiryIdx) : []),
+    [segment, spot, selected, expiryIdx]
+  );
 
+  const strikes = useMemo(() => {
+    const map = new Map<number, { ce?: OptionContract; pe?: OptionContract }>();
+    ceChain.forEach((c) => map.set(c.strike, { ...map.get(c.strike), ce: c }));
+    peChain.forEach((c) => map.set(c.strike, { ...map.get(c.strike), pe: c }));
+    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+  }, [ceChain, peChain]);
+
+  const activeContract = selectedOption;
   const tradeSymbol = segment === "OPT" && activeContract ? activeContract.symbol : selected;
   const tradePrice = segment === "OPT" && activeContract ? activeContract.premium : spot;
-  const lotSize = segment === "OPT" && activeContract ? activeContract.lotSize : (LOT_SIZES[selected] || 1);
+  const lotSize = segment === "OPT" && activeContract ? activeContract.lotSize : LOT_SIZES[selected] || 1;
   const quantity = parseFloat(qty) || 0;
   const estimated = quantity * tradePrice;
-  const fees = estimated * 0.0003;
+  const fees = Math.min(20, estimated * 0.0003);
   const position = portfolio.positions[tradeSymbol];
+  const candles = useMemo(() => generateIntradayCandles(selected, spot || 1000, 48), [selected, spot]);
+
+  const filteredMarkets = markets.filter(
+    (m) =>
+      !search ||
+      m.symbol.toLowerCase().includes(search.toLowerCase()) ||
+      m.name.toLowerCase().includes(search.toLowerCase())
+  );
 
   const symbolInfo = {
     symbol: tradeSymbol,
-    name: segment === "OPT" && activeContract
-      ? `${activeContract.underlying} ${activeContract.strike} ${activeContract.type}`
-      : (POPULAR_SYMBOLS.find((s) => s.symbol === selected)?.name || selected),
+    name:
+      segment === "OPT" && activeContract
+        ? `${activeContract.underlying} ${activeContract.strike} ${activeContract.type}`
+        : POPULAR_SYMBOLS.find((s) => s.symbol === selected)?.name || selected,
     type: "stock" as const,
     price: tradePrice,
     change: 0,
@@ -96,16 +124,19 @@ function TradeContent() {
       return;
     }
     if (segment === "OPT" && !activeContract) {
-      setMessage({ type: "error", text: "Select a strike from the option chain" });
+      setMessage({ type: "error", text: "Select a strike from the chain" });
       return;
     }
-    const res = side === "buy"
-      ? buy(symbolInfo, quantity, tradePrice)
-      : sell(tradeSymbol, quantity, tradePrice);
+    const stopLoss = sl ? parseFloat(sl) : undefined;
+    const target = tgt ? parseFloat(tgt) : undefined;
+    const res =
+      side === "buy"
+        ? buy(symbolInfo, quantity, tradePrice, { product, stopLoss, target })
+        : sell(tradeSymbol, quantity, tradePrice);
     setMessage({
       type: res.success ? "success" : "error",
       text: res.success
-        ? `${side.toUpperCase()} ${quantity} ${tradeSymbol} @ ₹${tradePrice} (${product})`
+        ? `${side.toUpperCase()} ${quantity} ${tradeSymbol} @ ₹${tradePrice.toFixed(2)}`
         : res.message,
     });
   };
@@ -113,150 +144,350 @@ function TradeContent() {
   const setLots = (lots: number) => setQty(String(lots * lotSize));
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-xl font-bold">Trade</h1>
-          <p className="text-xs text-[var(--muted)]">Equity · Futures · Options (CE/PE)</p>
+          <h1 className="text-lg font-bold sm:text-xl">Trade</h1>
+          <p className="text-[10px] text-[var(--muted)] sm:text-xs">Equity · Futures · Options</p>
         </div>
-        <div className="text-right text-sm">
-          <div className="text-[var(--muted)]">Available Cash</div>
+        <div className="text-right text-xs sm:text-sm">
+          <div className="text-[var(--muted)]">Cash</div>
           <div className="font-semibold">{formatCurrency(portfolio.cash)}</div>
         </div>
       </div>
 
-      <div className="mb-5 flex gap-1 rounded-lg border border-[var(--border)] p-1 w-fit">
+      <div className="mb-4 flex gap-1 rounded-lg border border-[var(--border)] p-1 w-fit">
         {(["EQ", "FUT", "OPT"] as Segment[]).map((s) => (
-          <button key={s} onClick={() => { setSegment(s); setSelectedOption(null); setMessage(null); }} className={cn("rounded-md px-4 py-2 text-sm font-semibold", segment === s ? "bg-[var(--green)] text-[#0b0e11]" : "text-[var(--muted)]")}>
+          <button
+            key={s}
+            onClick={() => {
+              setSegment(s);
+              setSelectedOption(null);
+              setMessage(null);
+            }}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-semibold sm:px-4 sm:text-sm",
+              segment === s ? "bg-[var(--green)] text-[#0b0e11]" : "text-[var(--muted)]"
+            )}
+          >
             {s === "EQ" ? "Equity" : s === "FUT" ? "Futures" : "Options"}
           </button>
         ))}
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-12">
-        <div className="card lg:col-span-3 max-h-[70vh] overflow-y-auto">
-          <h2 className="mb-3 text-sm font-semibold text-[var(--muted)]">UNDERLYING</h2>
-          <div className="space-y-1">
-            {markets.map((m) => (
-              <button key={m.symbol} onClick={() => { setSelected(m.symbol); setSelectedOption(null); }} className={cn("flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm", selected === m.symbol ? "bg-[var(--green)]/15 text-[var(--green)]" : "hover:bg-[var(--card-hover)]")}>
-                <div><div className="font-medium">{m.symbol}</div><div className="text-[10px] text-[var(--muted)]">{m.type === "index" ? "INDEX" : "EQ"}</div></div>
-                <div className="text-right"><div className="font-medium">{new Intl.NumberFormat("en-IN").format(m.price)}</div><div className={cn("text-[10px]", m.changePercent >= 0 ? "pos" : "neg")}>{formatPercent(m.changePercent)}</div></div>
+      <div className="grid gap-4 lg:grid-cols-12">
+        {/* Searchable watchlist */}
+        <div className="card lg:col-span-2 max-h-[50vh] overflow-hidden flex flex-col lg:max-h-[80vh]">
+          <input
+            className="input mb-2 text-xs"
+            placeholder="Search symbol…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <div className="overflow-y-auto flex-1 space-y-0.5">
+            {filteredMarkets.map((m) => (
+              <button
+                key={m.symbol}
+                onClick={() => {
+                  setSelected(m.symbol);
+                  setSelectedOption(null);
+                  setExpiryIdx(0);
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs",
+                  selected === m.symbol ? "bg-[var(--green)]/15 text-[var(--green)]" : "hover:bg-[var(--card-hover)]"
+                )}
+              >
+                <span className="font-medium">{m.symbol}</span>
+                <span className={cn("text-[10px]", m.changePercent >= 0 ? "pos" : "neg")}>
+                  {formatPercent(m.changePercent)}
+                </span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="lg:col-span-5 space-y-4">
+        {/* Center: chart + chain */}
+        <div className="lg:col-span-7 space-y-3">
           <div className="card">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-2xl font-bold">{selected}</h2>
-                  {livePrice?.source === "nse" && <span className="rounded bg-[var(--green)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[var(--green)]">NSE LIVE</span>}
-                  {livePrice?.source === "yahoo" && <span className="rounded bg-[var(--yellow)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[var(--yellow)]">LIVE</span>}
-                </div>
+            <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold sm:text-2xl">{selected}</h2>
+                {livePrice?.source === "nse" && (
+                  <span className="rounded bg-[var(--green)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[var(--green)]">NSE</span>
+                )}
+                {livePrice?.source === "yahoo" && (
+                  <span className="rounded bg-[var(--yellow)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[var(--yellow)]">LIVE</span>
+                )}
               </div>
               <div className="text-right">
-                <div className="text-2xl font-bold">{formatCurrency(spot)}</div>
-                <div className={cn("text-sm", (livePrice?.changePercent ?? 0) >= 0 ? "pos" : "neg")}>{formatPercent(livePrice?.changePercent ?? 0)}</div>
+                <div className="text-xl font-bold sm:text-2xl">{formatCurrency(spot)}</div>
+                <div className={cn("text-sm", (livePrice?.changePercent ?? 0) >= 0 ? "pos" : "neg")}>
+                  {formatPercent(livePrice?.changePercent ?? 0)}
+                </div>
               </div>
             </div>
+            <MiniChart candles={candles} height={180} />
           </div>
 
           {segment === "OPT" && (
-            <div className="card">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-semibold">Option Chain</h3>
-                <div className="flex gap-1 rounded border border-[var(--border)] p-0.5">
-                  <button onClick={() => { setOptionType("CE"); setSelectedOption(null); }} className={cn("rounded px-3 py-1 text-xs font-bold", optionType === "CE" ? "bg-[var(--green)] text-[#0b0e11]" : "text-[var(--muted)]")}>CE</button>
-                  <button onClick={() => { setOptionType("PE"); setSelectedOption(null); }} className={cn("rounded px-3 py-1 text-xs font-bold", optionType === "PE" ? "bg-[var(--red)] text-white" : "text-[var(--muted)]")}>PE</button>
+            <div className="card overflow-x-auto">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold">Option Chain</h3>
+                <div className="flex flex-wrap gap-1">
+                  {expiries.map((e, i) => (
+                    <button
+                      key={e.date}
+                      onClick={() => {
+                        setExpiryIdx(i);
+                        setSelectedOption(null);
+                      }}
+                      className={cn(
+                        "rounded px-2 py-1 text-[10px] font-medium",
+                        expiryIdx === i
+                          ? "bg-[var(--green)] text-[#0b0e11]"
+                          : "border border-[var(--border)] text-[var(--muted)]"
+                      )}
+                      title={e.kind}
+                    >
+                      {e.label}
+                      <span className="ml-1 opacity-60">{e.kind === "weekly" ? "W" : "M"}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
-              <div className="max-h-56 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead><tr className="text-[var(--muted)] border-b border-[var(--border)]"><th className="py-1.5 text-left">Strike</th><th className="py-1.5 text-right">LTP</th><th className="py-1.5 text-right">Chg%</th></tr></thead>
-                  <tbody>
-                    {optionChain.map((opt) => (
-                      <tr key={opt.symbol} onClick={() => setSelectedOption(opt)} className={cn("cursor-pointer border-b border-[var(--border)]/40 hover:bg-[var(--card-hover)]", activeContract?.strike === opt.strike && "bg-[var(--green)]/10")}>
-                        <td className="py-2">{opt.strike}</td>
-                        <td className="py-2 text-right">{opt.premium.toFixed(2)}</td>
-                        <td className={cn("py-2 text-right", opt.changePercent >= 0 ? "pos" : "neg")}>{formatPercent(opt.changePercent)}</td>
+
+              <table className="w-full min-w-[700px] text-[11px]">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-[var(--muted)]">
+                    <th className="py-1.5 text-right pr-1">OI</th>
+                    <th className="py-1.5 text-right">Δ</th>
+                    <th className="py-1.5 text-right">LTP</th>
+                    <th className="py-1.5 text-center font-bold text-white px-2">STRIKE</th>
+                    <th className="py-1.5 text-left">LTP</th>
+                    <th className="py-1.5 text-left">Δ</th>
+                    <th className="py-1.5 text-left pl-1">OI</th>
+                  </tr>
+                  <tr className="text-[10px] text-[var(--muted)]">
+                    <th colSpan={3} className="text-right pr-2 pb-1 text-[var(--green)]">CALLS (CE)</th>
+                    <th />
+                    <th colSpan={3} className="text-left pl-2 pb-1 text-[var(--red)]">PUTS (PE)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strikes.map(([strike, { ce, pe }]) => {
+                    const isAtm =
+                      Math.abs(strike - spot) <
+                      (selected === "BANKNIFTY" ? 80 : selected.includes("NIFTY") ? 40 : 15);
+                    const ceSel = activeContract?.type === "CE" && activeContract?.strike === strike;
+                    const peSel = activeContract?.type === "PE" && activeContract?.strike === strike;
+                    return (
+                      <tr key={strike} className={cn("border-b border-[var(--border)]/30", isAtm && "bg-[var(--yellow)]/5")}>
+                        <td
+                          className={cn("py-1.5 text-right pr-1 cursor-pointer", ceSel && "bg-[var(--green)]/15")}
+                          onClick={() => ce && setSelectedOption(ce)}
+                        >
+                          {ce ? `${(ce.oi! / 1000).toFixed(0)}K` : "—"}
+                        </td>
+                        <td
+                          className={cn("py-1.5 text-right cursor-pointer", ceSel && "bg-[var(--green)]/15")}
+                          onClick={() => ce && setSelectedOption(ce)}
+                        >
+                          {ce?.delta?.toFixed(2) ?? "—"}
+                        </td>
+                        <td
+                          className={cn("py-1.5 text-right font-medium cursor-pointer pos", ceSel && "bg-[var(--green)]/15")}
+                          onClick={() => ce && setSelectedOption(ce)}
+                        >
+                          {ce?.premium.toFixed(1) ?? "—"}
+                        </td>
+                        <td className={cn("py-1.5 text-center font-bold px-2", isAtm && "text-[var(--yellow)]")}>
+                          {strike}
+                        </td>
+                        <td
+                          className={cn("py-1.5 text-left font-medium cursor-pointer neg", peSel && "bg-[var(--red)]/15")}
+                          onClick={() => pe && setSelectedOption(pe)}
+                        >
+                          {pe?.premium.toFixed(1) ?? "—"}
+                        </td>
+                        <td
+                          className={cn("py-1.5 text-left cursor-pointer", peSel && "bg-[var(--red)]/15")}
+                          onClick={() => pe && setSelectedOption(pe)}
+                        >
+                          {pe?.delta?.toFixed(2) ?? "—"}
+                        </td>
+                        <td
+                          className={cn("py-1.5 text-left pl-1 cursor-pointer", peSel && "bg-[var(--red)]/15")}
+                          onClick={() => pe && setSelectedOption(pe)}
+                        >
+                          {pe ? `${(pe.oi! / 1000).toFixed(0)}K` : "—"}
+                        </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    );
+                  })}
+                </tbody>
+              </table>
+
               {activeContract && (
-                <div className="mt-3 rounded bg-[#0b0e11] p-2 text-xs">
-                  Selected: <span className="font-bold text-[var(--green)]">{activeContract.symbol}</span> · ₹{activeContract.premium} · Lot {activeContract.lotSize}
+                <div className="mt-2 flex flex-wrap gap-3 rounded bg-[#0b0e11] p-2 text-[11px]">
+                  <span className="font-bold text-[var(--green)]">{activeContract.symbol}</span>
+                  <span>₹{activeContract.premium}</span>
+                  <span>Δ {activeContract.delta}</span>
+                  <span>Θ {activeContract.theta}</span>
+                  <span>IV {activeContract.iv}%</span>
+                  <span>Lot {activeContract.lotSize}</span>
+                  <span className="text-[var(--muted)]">{activeContract.expiryLabel}</span>
                 </div>
               )}
             </div>
           )}
+        </div>
 
+        {/* Order ticket */}
+        <div className="space-y-3 lg:col-span-3">
           <div className="card">
-            <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-[var(--border)] p-1">
-              <button onClick={() => setSide("buy")} className={cn("rounded-md py-2.5 text-sm font-bold", side === "buy" ? "bg-[var(--green)] text-[#0b0e11]" : "text-[var(--muted)]")}>BUY</button>
-              <button onClick={() => setSide("sell")} className={cn("rounded-md py-2.5 text-sm font-bold", side === "sell" ? "bg-[var(--red)] text-white" : "text-[var(--muted)]")}>SELL</button>
+            <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg border border-[var(--border)] p-1">
+              <button
+                onClick={() => setSide("buy")}
+                className={cn("rounded-md py-2 text-sm font-bold", side === "buy" ? "bg-[var(--green)] text-[#0b0e11]" : "text-[var(--muted)]")}
+              >
+                BUY
+              </button>
+              <button
+                onClick={() => setSide("sell")}
+                className={cn("rounded-md py-2 text-sm font-bold", side === "sell" ? "bg-[var(--red)] text-white" : "text-[var(--muted)]")}
+              >
+                SELL
+              </button>
             </div>
 
-            <div className="mb-4 flex gap-2">
+            <div className="mb-3 flex gap-1">
               {(["MIS", "NRML", "CNC"] as Product[]).map((p) => (
-                <button key={p} onClick={() => setProduct(p)} className={cn("flex-1 rounded-md border py-2 text-xs font-semibold", product === p ? "border-[var(--green)] bg-[var(--green)]/10 text-[var(--green)]" : "border-[var(--border)] text-[var(--muted)]")}>{p}</button>
+                <button
+                  key={p}
+                  onClick={() => setProduct(p)}
+                  className={cn(
+                    "flex-1 rounded border py-1.5 text-[10px] font-semibold",
+                    product === p
+                      ? "border-[var(--green)] bg-[var(--green)]/10 text-[var(--green)]"
+                      : "border-[var(--border)] text-[var(--muted)]"
+                  )}
+                >
+                  {p}
+                </button>
               ))}
             </div>
 
-            <div className="mb-3">
-              <div className="mb-1 flex justify-between text-xs text-[var(--muted)]"><span>Quantity</span><span>Lot: {lotSize}</span></div>
-              <input type="number" min="1" className="input text-lg font-semibold" value={qty} onChange={(e) => setQty(e.target.value)} />
-              <div className="mt-2 flex gap-1.5">{[1,2,5,10].map(l => <button key={l} onClick={() => setLots(l)} className="rounded border border-[var(--border)] px-2.5 py-1 text-xs">{l} Lot</button>)}</div>
+            <div className="mb-2">
+              <div className="mb-1 flex justify-between text-[10px] text-[var(--muted)]">
+                <span>Qty</span>
+                <span>Lot {lotSize}</span>
+              </div>
+              <input
+                type="number"
+                min="1"
+                className="input text-base font-semibold"
+                value={qty}
+                onChange={(e) => setQty(e.target.value)}
+              />
+              <div className="mt-1.5 flex gap-1">
+                {[1, 2, 5, 10].map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLots(l)}
+                    className="rounded border border-[var(--border)] px-2 py-0.5 text-[10px]"
+                  >
+                    {l}L
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="mb-4 rounded-lg bg-[#0b0e11] p-3 text-sm">
-              <div className="flex justify-between"><span className="text-[var(--muted)]">Price</span><span>₹{tradePrice.toFixed(2)}</span></div>
-              <div className="mt-1 flex justify-between"><span className="text-[var(--muted)]">Value</span><span>{formatCurrency(estimated)}</span></div>
-              <div className="mt-1 flex justify-between font-semibold"><span>Total</span><span>{formatCurrency(side === "buy" ? estimated + fees : estimated - fees)}</span></div>
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-0.5 block text-[10px] text-[var(--muted)]">Stop Loss</label>
+                <input type="number" className="input text-sm" placeholder="Optional" value={sl} onChange={(e) => setSl(e.target.value)} />
+              </div>
+              <div>
+                <label className="mb-0.5 block text-[10px] text-[var(--muted)]">Target</label>
+                <input type="number" className="input text-sm" placeholder="Optional" value={tgt} onChange={(e) => setTgt(e.target.value)} />
+              </div>
             </div>
 
-            {message && <div className={cn("mb-3 rounded-lg px-3 py-2 text-sm", message.type === "success" ? "bg-[var(--green)]/15 text-[var(--green)]" : "bg-[var(--red)]/15 text-[var(--red)]")}>{message.text}</div>}
+            <div className="mb-3 rounded-lg bg-[#0b0e11] p-2.5 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">Price</span>
+                <span>₹{tradePrice.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">Value</span>
+                <span>{formatCurrency(estimated)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">Charges</span>
+                <span>₹{fees.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between font-semibold border-t border-[var(--border)] pt-1">
+                <span>Total</span>
+                <span>{formatCurrency(side === "buy" ? estimated + fees : estimated - fees)}</span>
+              </div>
+            </div>
 
-            <button onClick={handleSubmit} className={cn("btn w-full py-3 text-base font-bold", side === "buy" ? "btn-primary" : "btn-danger")}>
-              {side === "buy" ? "BUY" : "SELL"} {segment === "OPT" ? (activeContract?.symbol || "OPTION") : selected} · {product}
+            {message && (
+              <div
+                className={cn(
+                  "mb-2 rounded px-2 py-1.5 text-xs",
+                  message.type === "success" ? "bg-[var(--green)]/15 text-[var(--green)]" : "bg-[var(--red)]/15 text-[var(--red)]"
+                )}
+              >
+                {message.text}
+              </div>
+            )}
+
+            <button
+              onClick={handleSubmit}
+              className={cn("btn w-full py-2.5 text-sm font-bold", side === "buy" ? "btn-primary" : "btn-danger")}
+            >
+              {side === "buy" ? "BUY" : "SELL"}{" "}
+              {segment === "OPT" ? activeContract?.symbol?.slice(-10) || "OPT" : selected}
             </button>
           </div>
-        </div>
 
-        <div className="space-y-4 lg:col-span-4">
-          <div className="card">
-            <h3 className="mb-3 text-sm font-semibold text-[var(--muted)]">ACCOUNT</h3>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-[var(--muted)]">Total Value</span><span>{formatCurrency(totalValue)}</span></div>
-              <div className="flex justify-between"><span className="text-[var(--muted)]">Cash</span><span>{formatCurrency(portfolio.cash)}</span></div>
-            </div>
-          </div>
-
-          {position ? (
-            <div className="card">
-              <h3 className="mb-3 text-sm font-semibold text-[var(--muted)]">POSITION</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-[var(--muted)]">Symbol</span><span className="text-xs font-medium">{position.symbol}</span></div>
-                <div className="flex justify-between"><span className="text-[var(--muted)]">Qty</span><span>{position.quantity}</span></div>
-                <div className="flex justify-between"><span className="text-[var(--muted)]">Avg</span><span>{formatCurrency(position.avgCost)}</span></div>
-                <div className="flex justify-between border-t border-[var(--border)] pt-2"><span className="text-[var(--muted)]">P&L</span><span className={cn("font-bold", position.unrealizedPnL >= 0 ? "pos" : "neg")}>{formatCurrency(position.unrealizedPnL)}</span></div>
+          {position && (
+            <div className="card text-xs space-y-1.5">
+              <h3 className="font-semibold text-[var(--muted)]">POSITION</h3>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">Qty</span>
+                <span>{position.quantity}</span>
               </div>
-              <button onClick={() => { setSide("sell"); setQty(String(position.quantity)); }} className="btn btn-danger mt-4 w-full">Square Off</button>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">Avg</span>
+                <span>{formatCurrency(position.avgCost)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted)]">P&L</span>
+                <span className={cn("font-bold", position.unrealizedPnL >= 0 ? "pos" : "neg")}>
+                  {formatCurrency(position.unrealizedPnL)}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setSide("sell");
+                  setQty(String(position.quantity));
+                }}
+                className="btn btn-danger mt-2 w-full text-xs"
+              >
+                Square Off
+              </button>
             </div>
-          ) : (
-            <div className="card py-8 text-center text-sm text-[var(--muted)]">No open position</div>
           )}
 
-          <div className="card text-xs text-[var(--muted)] space-y-1">
-            <div className="font-semibold text-white mb-1">How to trade Options</div>
-            <div>1. Click <b>Options</b> tab</div>
-            <div>2. Select Nifty / BankNifty / stock</div>
-            <div>3. Choose CE or PE</div>
-            <div>4. Click a strike in the chain</div>
-            <div>5. Set quantity (lots) and Buy/Sell</div>
+          <div className="card text-[10px] text-[var(--muted)]">
+            <div className="font-semibold text-white mb-1">How to use</div>
+            <div>1. Search & select underlying</div>
+            <div>2. Pick expiry (W = weekly, M = monthly)</div>
+            <div>3. Click CE LTP (left) or PE LTP (right)</div>
+            <div>4. Set qty, SL, Target → Buy/Sell</div>
           </div>
         </div>
       </div>
